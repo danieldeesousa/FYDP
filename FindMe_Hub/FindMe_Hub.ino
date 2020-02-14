@@ -3,15 +3,20 @@
 #include <SPI.h>
 #include <RH_RF95.h>
 
+// Disable/enable printlns
+//#define Sprintln(a) (Serial.println(a)) // uncomment to ENABLE printlns
+#define Sprintln(a) // uncomment to DISABLE printlns
+
 // Pin definitions
 #define RFM95_RST 30
 #define RFM95_CS 27
 #define RFM95_INT 31
 #define BATTERY_VOLTAGE (A0) // change dependent on PCB
 #define TAG_CHARGE_DET (A1) // change dependent on PCB
+#define TAG_CHARGE_COMP (A2) // change dependent on PCB
 #define WIFI_LED // driven on ESP8266
-#define BLE_LED (19) // driven by low-level BLE lib
 #define TAG_CHARGE_LED (15) // change dependent on PCB
+#define BLE_LED (19) // driven by low-level BLE lib
 
 // BLE services
 BLEDfu bledfu; // OTA DFU service
@@ -27,7 +32,7 @@ RH_RF95 rf95(RFM95_CS, RFM95_INT); // Singleton instance of the radio driver
 #define VOLTAGE_USB (4.5) // Voltage detected when USB is in
 
 // Application variables
-#define RSSI_BUF_SIZE 1
+#define RSSI_BUF_SIZE 5
 int16_t rssiBuf[RSSI_BUF_SIZE]; // used to average RSSI value
 int8_t rssiBuf_idx = 0;
 int16_t averageRSSI;
@@ -46,7 +51,7 @@ void prph_disconnect_callback(uint16_t conn_handle, uint8_t reason)
 void setup(void)
 {
   Serial.begin(9600);
-  Serial.println("FindMe - Hub booted");
+  Sprintln("FindMe - Hub booted");
   
   // Demo LED
   pinMode(TAG_CHARGE_LED, OUTPUT);
@@ -81,22 +86,18 @@ void loop(void)
   // Check ESP Serial port
   readSerial();
   delay(1000); 
-
-
 }
 
+static char input[20];
+static int idx = 0;
 void readSerial()
 {
-  char input[20];
-  input[0] = '\0';
-  int idx = 0;
-
-  if(Serial.available() > 0)
+  while(Serial.available() > 0)
   {
     // append to array
     input[idx] = Serial.read();
     idx++;
-
+    
     // check if end of message
     if(input[idx-1] == '\n')
     {
@@ -105,6 +106,18 @@ void readSerial()
       {
         sendForcedRqst();
       }
+
+      // clear buffer
+      idx = 0;
+      input[0] = '\0';
+    }
+
+    // check for buffer overflow
+    if(idx >= 10)
+    {
+      // clear buffer
+      idx = 0;
+      input[0] = '\0';
     }
   }
 }
@@ -125,17 +138,19 @@ void recieveLoRaPacket()
       buf[len] = '\0';
       
       // Print packet
-      Serial.println("LoRa RX: ");
-      Serial.println((char*)buf);
+      Sprintln("LoRa RX: ");
+      Sprintln((char*)buf);
 
       // Determine whether to send over Wi-Fi
       // Check if USB is connected
       // *2 because of voltage divider
       float battVoltage = 2*(analogRead(BATTERY_VOLTAGE) / ADC_RES) * REF_VOLTAGE;
-      if(battVoltage > VOLTAGE_USB)
+      //if(battVoltage > VOLTAGE_USB)
+      if(1)
       {
         // Send LoRa packet to ESP to process
         Serial.write((char*)buf);
+        Serial.write("\n");
       }
 
       // Determine whether to send over BLE
@@ -146,7 +161,7 @@ void recieveLoRaPacket()
         buf[16] = '\0';
         
         // Get RSSI
-        Serial.println(rf95.lastRssi());
+        Sprintln(rf95.lastRssi());
         rssiBuf[rssiBuf_idx++] = rf95.lastRssi();
         rssiBuf_idx %= RSSI_BUF_SIZE;
     
@@ -159,7 +174,7 @@ void recieveLoRaPacket()
         
         // Add RSSI to data packet
         sprintf((char*)buf, "%s%d", buf, rf95.lastRssi());
-        //Serial.println((char*)buf);
+        //Sprintln((char*)buf);
         
         // Send this data over BLE
         bleuart.print((char*)buf);
@@ -175,18 +190,21 @@ void sendForcedRqst()
   digitalWrite(LED_BUILTIN, HIGH);
 
   // Enable transmitter
+  delay(100);
   rf95.setModeTx();
+  delay(100);
 
-  // Place lat/long data into buffer to be sent over LoRa
-  uint8_t buf[] = "FRCD-RQST";
-
-  // Send LoRa message with GPS coordinates
-  rf95.send(buf, 20);
+  // Send forced request LoRa message
+  const uint8_t forcedReqBuf[] = "FRCD-RQST";
+  uint8_t len = sizeof(forcedReqBuf);
+  rf95.send(forcedReqBuf, len);
   delay(10);
   rf95.waitPacketSent(); // blocks until transmitter is no longer transmitting
   
   // Put transciever back in RX mode
+  delay(100);
   rf95.setModeRx();
+  delay(100);
   
   digitalWrite(LED_BUILTIN, LOW);
 }
@@ -232,16 +250,16 @@ void setupLoRa()
   
   // Initialize LoRa
   while (!rf95.init()) {
-    Serial.println("LoRa radio init failed");
-    Serial.println("Uncomment '#define SERIAL_DEBUG' in RH_RF95.cpp for detailed debug info");
+    Sprintln("LoRa radio init failed");
+    Sprintln("Uncomment '#define SERIAL_DEBUG' in RH_RF95.cpp for detailed debug info");
     digitalWrite(LED_BUILTIN, HIGH);
     while (1);
   }
-  Serial.println("LoRa radio init OK!");
+  Sprintln("LoRa radio init OK!");
   
   // Defaults after init are 434.0MHz, modulation GFSK_Rb250Fd250, +13dbM
   if (!rf95.setFrequency(RF95_FREQ)) {
-    Serial.println("setFrequency failed");
+    Sprintln("setFrequency failed");
     digitalWrite(LED_BUILTIN, HIGH);
     while (1);
   }
@@ -250,7 +268,8 @@ void setupLoRa()
   // The default transmitter power is 13dBm, using PA_BOOST.
   // If you are using RFM95/96/97/98 modules which uses the PA_BOOST transmitter pin, then
   // you can set transmitter powers from 5 to 23 dBm:
-  rf95.setTxPower(23, true);
+  // False uses PA_BOOST pins (RF95)
+  rf95.setTxPower(23, false);
 
   // Start transciever in RX mode
   rf95.setModeRx();

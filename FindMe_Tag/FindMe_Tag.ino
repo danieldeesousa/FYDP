@@ -74,7 +74,7 @@ void accel_int2_isr(void)
 
 void setup() 
 {
-  Serial.begin(115200);
+  Serial.begin(9600);
   Serial.println("FindMe - Tag booted");
 
   // Demo: LEDs
@@ -102,7 +102,7 @@ void loop()
       timerFlag = 0;
       timer.attachInterrupt(&timer_isr, LORA_RX_DELAY*1000000); // microseconds
       
-      // Check if we need to check LoRa transciever for messages
+      // Check LoRa transciever for messages
       recieveLoRaPacket();
       
       // Check if we need to send new data
@@ -125,7 +125,7 @@ void recieveLoRaPacket()
   {
     // Should be a message for us now
     uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
-    uint8_t len = sizeof(buf);
+    uint8_t len = sizeof(buf); // potentially useless line
     if (rf95.recv(buf, &len))
     { 
       // Print packet
@@ -152,7 +152,9 @@ void sendLoRaPacket()
   digitalWrite(BLUE_LED, HIGH);
 
   // Enable transmitter
+  delay(100);
   rf95.setModeTx();
+  delay(100);
 
   // LoRa buffer
   uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
@@ -170,7 +172,7 @@ void sendLoRaPacket()
     longitude_mdeg = myGPS.getLongitude()/100;
   }
 
-  Serial.print(" Lat: "); Serial.print(latitude_mdeg); Serial.print(" Long: "); Serial.print(longitude_mdeg);
+  Serial.print("Lat: "); Serial.print(latitude_mdeg); Serial.print(" Long: "); Serial.print(longitude_mdeg);
 
   // Add +/- signs to coords
   // Negative coords already have negative sign
@@ -201,11 +203,11 @@ void sendLoRaPacket()
   // Append battery percentage and alert dignifier
   // Y = alert risen, N = no alert
   // Geofence status: 0 = unkown, 1 = inside, 2 = outside
-  // /0 is needed for strlen to work properly
+  // \0 is needed for strlen to work properly
   // Get geofence status
   geofenceState currentGeofenceState; // Create storage for the geofence state
   myGPS.getGeofenceState(currentGeofenceState);
-  Serial.print(" GEO: "); Serial.println(currentGeofenceState.states[0]);
+  Serial.print("GEO: "); Serial.println(currentGeofenceState.states[0]);
   if(currentGeofenceState.states[0] == 2)
   {
      sprintf ((char*)buf, "%s %d Y\0", (char*)buf, batteryPercentage);
@@ -223,7 +225,9 @@ void sendLoRaPacket()
   Serial.println((char*)buf);
   
   // Put transciever back in RX mode
+  delay(100);
   rf95.setModeRx();
+  delay(100);
   
   digitalWrite(BLUE_LED, LOW);
 }
@@ -298,6 +302,7 @@ void setupLoRa()
   // The default transmitter power is 13dBm, using PA_BOOST.
   // If you are using RFM95/96/97/98 modules which uses the PA_BOOST transmitter pin, then 
   // you can set transmitter powers from 5 to 23 dBm:
+  // False uses PA_BOOST pins (RF95)
   rf95.setTxPower(23, false);
 
   // Start transciever in RX mode
