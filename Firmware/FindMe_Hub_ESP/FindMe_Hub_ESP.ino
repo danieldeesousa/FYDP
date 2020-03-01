@@ -17,7 +17,7 @@
 static char input[40];
 static int idx = 0;
 bool forcedRequestFlag = 0;
-
+WiFiEventHandler disconnectedEventHandler;
 const char* kSSID = "Bosvark";
 const char* kPassword = "77368272BG";
 
@@ -234,6 +234,19 @@ void setup()
   Sprintln("IP address: ");
   Sprintln(WiFi.localIP());
 
+  // Register handler which is called when Wi-Fi is disconnected
+  disconnectedEventHandler = WiFi.onStationModeDisconnected([](const WiFiEventStationModeDisconnected& event)
+  {
+      bool ledState2 = true;
+      while (WiFi.status() != WL_CONNECTED) 
+      {
+        delay(500);
+        digitalWrite(LED_PIN, ledState2);
+        ledState2 = !ledState2;
+      }
+      digitalWrite(LED_PIN, LOW); // Note: LED is active LOW
+  });
+
   // Setup Firebase connection
   StatusResponse uid_response = ServerRequestService::getUID();
   if (uid_response.status_code == ERROR_CODE) return;
@@ -300,6 +313,7 @@ void loop()
   // TODO: Check for Wi-Fi disconnection
   // onStationModeDisconnected
   // https://arduino-esp8266.readthedocs.io/en/latest/esp8266wifi/generic-examples.html
+  // Seems to put the processor in a weird state
 }
 
 void testPulse()
