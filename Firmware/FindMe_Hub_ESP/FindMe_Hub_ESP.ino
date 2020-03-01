@@ -16,8 +16,8 @@
 #define LED_PIN (0)
 static char input[40];
 static int idx = 0;
-bool forcedRequestFlag = 0;
-WiFiEventHandler disconnectedEventHandler;
+bool forcedRequestFlag = 0; // set when server has requested data
+bool forcedRequestReject = 0; // set when we just replied to forced request but flag has not yet been updated // a temp fix to double FRCD-RQST
 const char* kSSID = "Bosvark";
 const char* kPassword = "77368272BG";
 
@@ -194,8 +194,9 @@ void streamCallback(StreamData data)
 
   // Check if forced request is sent, if not, we do not care
   // don't want infinite loop so only request when needed
-  if (force_request == 0)
+  if (force_request == 0 || forcedRequestReject)
   {
+    forcedRequestReject = 0; // clear flag
     return;
   }
 
@@ -234,18 +235,8 @@ void setup()
   Sprintln("IP address: ");
   Sprintln(WiFi.localIP());
 
-  // Register handler which is called when Wi-Fi is disconnected
-  disconnectedEventHandler = WiFi.onStationModeDisconnected([](const WiFiEventStationModeDisconnected& event)
-  {
-      bool ledState2 = true;
-      while (WiFi.status() != WL_CONNECTED) 
-      {
-        delay(500);
-        digitalWrite(LED_PIN, ledState2);
-        ledState2 = !ledState2;
-      }
-      digitalWrite(LED_PIN, LOW); // Note: LED is active LOW
-  });
+  // Clear nRF-ESP UART buffer
+  Serial.write("\n");
 
   // Setup Firebase connection
   StatusResponse uid_response = ServerRequestService::getUID();
@@ -270,7 +261,24 @@ void setup()
 }
 
 void loop() 
-{
+{ 
+  // Check if Wi-Fi is connected
+  if(WiFi.status() != WL_CONNECTED)
+  {
+      bool ledState2 = true;
+      // while (WiFi.status() != WL_CONNECTED) 
+      // infinite loop until reset
+      while (1) 
+      {
+        delay(200);
+        digitalWrite(LED_PIN, ledState2);
+        ledState2 = !ledState2;
+      }
+      // digitalWrite(LED_PIN, LOW); // Note: LED is active LOW
+      // ESP.restart(); // put the processor in a weird state
+      // https://arduino-esp8266.readthedocs.io/en/latest/esp8266wifi/generic-examples.html
+  }
+  
   // Wait on Serial message
   while(Serial.available() > 0)
   {
@@ -299,6 +307,7 @@ void loop()
         {
            // clear forced request 
            forcedRequestFlag = 0;
+           forcedRequestReject = 1;
            ServerRequestService::endForceRequest();
            testPulse();
         }
@@ -309,11 +318,6 @@ void loop()
       input[0] = '\0';
     }
   }
-  
-  // TODO: Check for Wi-Fi disconnection
-  // onStationModeDisconnected
-  // https://arduino-esp8266.readthedocs.io/en/latest/esp8266wifi/generic-examples.html
-  // Seems to put the processor in a weird state
 }
 
 void testPulse()
