@@ -90,10 +90,8 @@ void setup()
 
 void loop()
 {
-  // TODO:  Check if USB is plugged in
-  // If so, do not continue sending data packets until USB is unplugged
-    // Maybe do - for demo purposes
-  // While plugged in, monitor battery batt stat pin
+  // Wait for interrupt - go into low-power mode
+  __WFI();
   
   // Check to see if timer has expired
   if(timerFlag)
@@ -151,11 +149,6 @@ void sendLoRaPacket()
 {
   digitalWrite(BLUE_LED, HIGH);
 
-  // Enable transmitter
-  delay(100);
-  rf95.setModeTx();
-  delay(100);
-
   // LoRa buffer
   uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
   buf[0] = '\0';
@@ -164,7 +157,7 @@ void sendLoRaPacket()
   // Make sure GPS has valid position
   // TODO: GPS should be able to get position in the background. we should not only be able to get it when it has a fix
   // TEST: Either see after first fix if this is a problem or revert to NMEA format
-  Serial.print(" Lat1: "); Serial.print(myGPS.getLatitude()); Serial.print(" Long1: "); Serial.print(myGPS.getLongitude());
+  Serial.print("Lat1: "); Serial.print(myGPS.getLatitude()); Serial.print(" Long1: "); Serial.print(myGPS.getLongitude());
   if( myGPS.getFixType() > 0)
   {
     // Note: /100 needed to make sure its in format +xx.xxxxx
@@ -172,7 +165,7 @@ void sendLoRaPacket()
     longitude_mdeg = myGPS.getLongitude()/100;
   }
 
-  Serial.print("Lat: "); Serial.print(latitude_mdeg); Serial.print(" Long: "); Serial.print(longitude_mdeg);
+  Serial.print(" Lat: "); Serial.print(latitude_mdeg); Serial.print(" Long: "); Serial.print(longitude_mdeg);
 
   // Add +/- signs to coords
   // Negative coords already have negative sign
@@ -207,7 +200,7 @@ void sendLoRaPacket()
   // Get geofence status
   geofenceState currentGeofenceState; // Create storage for the geofence state
   myGPS.getGeofenceState(currentGeofenceState);
-  Serial.print("GEO: "); Serial.println(currentGeofenceState.states[0]);
+  Serial.print(" GEO: "); Serial.println(currentGeofenceState.states[0]);
   if(currentGeofenceState.states[0] == 2)
   {
      sprintf ((char*)buf, "%s %d Y\0", (char*)buf, batteryPercentage);
@@ -225,6 +218,8 @@ void sendLoRaPacket()
   Serial.println((char*)buf);
   
   // Put transciever back in RX mode
+  // TODO: already done by available()??
+  rf95.setModeIdle();
   delay(100);
   rf95.setModeRx();
   delay(100);

@@ -32,7 +32,7 @@ RH_RF95 rf95(RFM95_CS, RFM95_INT); // Singleton instance of the radio driver
 #define VOLTAGE_USB (4.5) // Voltage detected when USB is in
 
 // Application variables
-#define RSSI_BUF_SIZE 5
+#define RSSI_BUF_SIZE 1 // TODO to implement LPF
 int16_t rssiBuf[RSSI_BUF_SIZE]; // used to average RSSI value
 int8_t rssiBuf_idx = 0;
 int16_t averageRSSI;
@@ -131,7 +131,7 @@ void recieveLoRaPacket()
   {
     // Should be a message for us now
     uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
-    uint8_t len = sizeof(buf);;
+    uint8_t len = sizeof(buf);
     if (rf95.recv(buf, &len))
     {
       // Terminate message
@@ -156,9 +156,8 @@ void recieveLoRaPacket()
       // Determine whether to send over BLE
       if(isBLEConnected == true)
       {
-        // Remove battery and alert info
-        // Confirm with FYDP team
-        buf[16] = '\0';
+        // Remove geo-fence indicator
+        buf[len-1] = '\0';
         
         // Get RSSI
         Sprintln(rf95.lastRssi());
@@ -173,11 +172,15 @@ void recieveLoRaPacket()
         averageRSSI /= RSSI_BUF_SIZE; // determine average by dividing by size of array
         
         // Add RSSI to data packet
-        sprintf((char*)buf, "%s%d", buf, rf95.lastRssi());
+        sprintf((char*)buf, "%s%d", buf, averageRSSI);
         //Sprintln((char*)buf);
-        
-        // Send this data over BLE
-        bleuart.print((char*)buf);
+
+        // Encode message (halves the required memory)
+        char* bleMsgEncoded = encodeBLE((char*)buf);
+
+        // Send the encoded data over BLE
+        bleuart.print(bleMsgEncoded);
+        delete bleMsgEncoded;
       }
     }
   }      
@@ -189,11 +192,6 @@ void sendForcedRqst()
 {
   digitalWrite(LED_BUILTIN, HIGH);
 
-  // Enable transmitter
-  delay(100);
-  rf95.setModeTx();
-  delay(100);
-
   // Send forced request LoRa message
   const uint8_t forcedReqBuf[] = "FRCD-RQST";
   uint8_t len = sizeof(forcedReqBuf);
@@ -202,12 +200,51 @@ void sendForcedRqst()
   rf95.waitPacketSent(); // blocks until transmitter is no longer transmitting
   
   // Put transciever back in RX mode
+  rf95.setModeIdle();
   delay(100);
   rf95.setModeRx();
   delay(100);
   
   digitalWrite(LED_BUILTIN, LOW);
 }
+
+// 0-9 is 0001 to 1010
+// ' ' is 1011
+// '+' is 1100
+// '-' is 1101
+// nothing is 0000
+const char& IGNORE_CHAR = 14;
+char encodeLetter(const char& c) 
+{
+  if ('0' <= c && c <= '9') return (c - '0') + 1;
+  if (c == ' ') return 11;
+  if (c == '+') return 12;
+  if (c == '-') return 13;
+  Serial.println("failed encodeLetter " + String(c));
+  return IGNORE_CHAR;
+}
+
+// Encodes a string (char array) to allow for double the bandwidth
+char* encodeBLE(const char* s) 
+{
+  const int& len = strlen(s);
+  // 5 letters becomes 3 letters + null pointer
+  const int& out_len = ceil(len / 2.0) + 1;
+  char* out = (char*)malloc(out_len * sizeof(char));
+  for(int i = 0; i < len; i += 2) {
+    char c = encodeLetter(s[i]) << 4; // shift to first 4 of 8
+    if (i + 1 < len) {
+      c |= encodeLetter(s[i+1]); // end to last 4 of 8
+    } else {
+      c |= IGNORE_CHAR;
+    }
+    out[i / 2] = c;
+  }
+  out[out_len - 1] = '\0';
+  return out;
+}
+
+
 
 
 
