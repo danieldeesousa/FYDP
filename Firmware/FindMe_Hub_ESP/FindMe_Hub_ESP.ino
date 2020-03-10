@@ -239,9 +239,7 @@ void setup()
   Serial.write("\n");
 
   // Setup Firebase connection
-  StatusResponse uid_response = ServerRequestService::getUID();
-  if (uid_response.status_code == ERROR_CODE) return;
-  const String& uid = uid_response.response;
+  const String& uid = "WT6piAaCIiN7UCNuDuuBgiKMiTs1";
   Sprintf("uid: %s\n", uid.c_str());
 
   Firebase.begin(kFirebaseHost, kFirebaseAuth);
