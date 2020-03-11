@@ -263,7 +263,7 @@ void setup()
 void loop() 
 { 
   // Check if Wi-Fi is connected
-  if(WiFi.status() == WL_CONNECTED)
+  if(WiFi.status() != WL_CONNECTED)
   {
       bool ledState2 = false;
       // starting low -> off/on -> off/on -> low
