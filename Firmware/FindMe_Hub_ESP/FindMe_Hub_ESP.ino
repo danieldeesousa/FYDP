@@ -266,14 +266,15 @@ void loop()
   if(WiFi.status() != WL_CONNECTED)
   {
       bool ledState2 = false;
-      // starting low -> off/on -> off/on -> low
-      for (int i = 0; i < 4; i++) 
+      // starting low -> off/on -> off/on -> off
+      for (int i = 0; i < 5; i++) 
       {
         delay(200);
         digitalWrite(LED_PIN, ledState2);
         ledState2 = !ledState2;
       }
-      digitalWrite(LED_PIN, LOW);
+  } else {
+    digitalWrite(LED_PIN, LOW);
   }
   
   // Wait on Serial message
