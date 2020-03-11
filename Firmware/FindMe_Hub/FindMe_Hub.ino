@@ -11,11 +11,10 @@
 #define RFM95_RST 30
 #define RFM95_CS 27
 #define RFM95_INT 31
-#define BATTERY_VOLTAGE (A0) // change dependent on PCB
-#define TAG_CHARGE_DET (A1) // change dependent on PCB
-#define TAG_CHARGE_COMP (A2) // change dependent on PCB
-#define WIFI_LED // driven on ESP8266
-#define TAG_CHARGE_LED (15) // change dependent on PCB
+#define BATTERY_VOLTAGE (A3) // senses battery voltage/USB rail
+#define TAG_CHARGE_DET (A4) // senses whether tag is plugged in
+#define TAG_CHARGE_COMP (A5) // senses whether tag is done charging
+#define TAG_CHARGE_LED (25) // indicates tag charging activity
 #define BLE_LED (19) // driven by low-level BLE lib
 
 // BLE services
@@ -23,19 +22,25 @@ BLEDfu bledfu; // OTA DFU service
 BLEUart bleuart; // Uart over BLE service
 
 // LoRa definitions
-#define RF95_FREQ 915.0 // Can also be 434.0 - must match freq of chipset
-RH_RF95 rf95(RFM95_CS, RFM95_INT); // Singleton instance of the radio driver
+#define RF95_FREQ (915.0) // frequency of LoRa
+RH_RF95 rf95(RFM95_CS, RFM95_INT); // singleton instance of the LoRa driver
 
 // Analog definitions
 #define ADC_RES (1024.0) // default 10bit resolution - can be 8,10,12,14
-#define REF_VOLTAGE (3.6) // Internal ADC reference voltage
-#define VOLTAGE_USB (4.5) // Voltage detected when USB is in
+#define REF_VOLTAGE (3.6) // internal ADC reference voltage
+#define VOLTAGE_USB (4.5) // voltage detected when USB is in
+#define VOLTAGE_DET_TAG (1.0) // HIGH voltage of hub-tag charging interface
+
+// Serial port variables
+static char input[20]; // serial buffer
+static int idx = 0; // current index in serial buffer
+#define FRCD_RQST_SIZE (9) // number of chars in "FRCD-RQST"
 
 // Application variables
 #define RSSI_BUF_SIZE 1 // TODO to implement LPF
 int16_t rssiBuf[RSSI_BUF_SIZE]; // used to average RSSI value
 int8_t rssiBuf_idx = 0;
-int16_t averageRSSI;
+int16_t averageRSSI; // RSSI = Received Signal Strength Indicator
 bool isBLEConnected = 0; // 1 if connected, 0 if not
 
 // BLE connection callbacks
@@ -52,22 +57,30 @@ void setup(void)
 {
   Serial.begin(9600);
   Sprintln("FindMe - Hub booted");
-  
-  // Demo LED
+
+  // Enable LEDs
   pinMode(TAG_CHARGE_LED, OUTPUT);
+  digitalWrite(TAG_CHARGE_LED, LOW);
   pinMode(BLE_LED, OUTPUT);
 
+  // Setup BLE and LoRa
   setupBLE();
   setupLoRa();
 }
 
 void loop(void)
 {
-  // Check if tag is plugged in
-  float tagChargeVoltage = (analogRead(TAG_CHARGE_DET) / ADC_RES) * REF_VOLTAGE;
-
   // TAG LED charging behaviour: flashing (charging), solid (charge complete)
-  if(tagChargeVoltage > 1)
+  // Check if hub is powered, tag is plugged in, and done charging
+  // 2* because of resistor divider (BATTERY_VOLTAGE)
+  // TAG_CHARGE_DET is biased at 1.66V and is pulled down when tag is plugged in
+  // TAG_CHARGE_COMP is pulled low by default and is driven high when the tag is done charging
+  float battVoltage = 2*(analogRead(BATTERY_VOLTAGE) / ADC_RES) * REF_VOLTAGE;
+  float tagChargeVoltage = (analogRead(TAG_CHARGE_DET) / ADC_RES) * REF_VOLTAGE;
+  float tagCompVoltage = (analogRead(TAG_CHARGE_COMP) / ADC_RES) * REF_VOLTAGE;
+
+  // Check if hub is powered and whether tag is connected
+  if((battVoltage > VOLTAGE_USB) && (tagChargeVoltage < VOLTAGE_DET_TAG))
   {
     digitalWrite(TAG_CHARGE_LED, HIGH);
   }
@@ -76,33 +89,33 @@ void loop(void)
   recieveLoRaPacket();
   delay(1000);
 
-  // TAG LED charging behaviour: flashing (charging), solid (charge complete)
-  // TODO: check here is charge complete (dont turn off LED when charge complete)
-  if(tagChargeVoltage > 1)
+  // Check if tag charging is complete (do not turn off LED when charge complete)
+  // Turn off LED if USB-B is no longer powering hub OR if tag is disconnected OR if tag is still charging
+  if((battVoltage < VOLTAGE_USB) || (tagChargeVoltage > VOLTAGE_DET_TAG) || (tagCompVoltage < VOLTAGE_DET_TAG))
   {
     digitalWrite(TAG_CHARGE_LED, LOW);
   }
-
+  
   // Check ESP Serial port
   readSerial();
   delay(1000); 
 }
 
-static char input[20];
-static int idx = 0;
 void readSerial()
 {
+  // check if serial data is available
   while(Serial.available() > 0)
   {
-    // append to array
+    // append data to array
     input[idx] = Serial.read();
     idx++;
     
     // check if end of message
     if(input[idx-1] == '\n')
     {
+      // check if forced request sent from ESP
       input[idx-1] = '\0';
-      if(strncmp(input, "FRCD-RQST", 9) == 0)
+      if(strncmp(input, "FRCD-RQST", FRCD_RQST_SIZE) == 0)
       {
         sendForcedRqst();
       }
@@ -113,7 +126,7 @@ void readSerial()
     }
 
     // check for buffer overflow
-    if(idx >= 10)
+    if(idx >= (FRCD_RQST_SIZE+1))
     {
       // clear buffer
       idx = 0;
@@ -123,13 +136,10 @@ void readSerial()
 }
 
 void recieveLoRaPacket()
-{
-  digitalWrite(LED_BUILTIN, HIGH);
-  
+{ 
   // Wait for LoRa message
   if (rf95.available())
   {
-    // Should be a message for us now
     uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
     uint8_t len = sizeof(buf);
     if (rf95.recv(buf, &len))
@@ -141,19 +151,11 @@ void recieveLoRaPacket()
       Sprintln("LoRa RX: ");
       Sprintln((char*)buf);
 
-      // Determine whether to send over Wi-Fi
-      // Check if USB is connected
-      // *2 because of voltage divider
-      float battVoltage = 2*(analogRead(BATTERY_VOLTAGE) / ADC_RES) * REF_VOLTAGE;
-      //if(battVoltage > VOLTAGE_USB)
-      if(1)
-      {
-        // Send LoRa packet to ESP to process
-        Serial.write((char*)buf);
-        Serial.write("\n");
-      }
+      // Send LoRa packet to ESP to process
+      Serial.write((char*)buf);
+      Serial.write("\n");
 
-      // Determine whether to send over BLE
+      // Determine whether to send packet over BLE
       if(isBLEConnected == true)
       {
         // Remove geo-fence indicator
@@ -173,7 +175,6 @@ void recieveLoRaPacket()
         
         // Add RSSI to data packet
         sprintf((char*)buf, "%s%d", buf, averageRSSI);
-        //Sprintln((char*)buf);
 
         // Encode message (halves the required memory)
         char* bleMsgEncoded = encodeBLE((char*)buf);
@@ -184,14 +185,10 @@ void recieveLoRaPacket()
       }
     }
   }      
-
-  digitalWrite(LED_BUILTIN, LOW);
 }
 
 void sendForcedRqst()
 {
-  digitalWrite(LED_BUILTIN, HIGH);
-
   // Send forced request LoRa message
   const uint8_t forcedReqBuf[] = "FRCD-RQST";
   uint8_t len = sizeof(forcedReqBuf);
@@ -204,10 +201,9 @@ void sendForcedRqst()
   delay(100);
   rf95.setModeRx();
   delay(100);
-  
-  digitalWrite(LED_BUILTIN, LOW);
 }
 
+// BLE ENCODING
 // 0-9 is 0001 to 1010
 // ' ' is 1011
 // '+' is 1100
@@ -243,10 +239,6 @@ char* encodeBLE(const char* s)
   out[out_len - 1] = '\0';
   return out;
 }
-
-
-
-
 
 /////////////////////////////////////////////////////////////
 //////////// HELPER FUNCTIONS ///////////////////////////////
@@ -289,7 +281,6 @@ void setupLoRa()
   while (!rf95.init()) {
     Sprintln("LoRa radio init failed");
     Sprintln("Uncomment '#define SERIAL_DEBUG' in RH_RF95.cpp for detailed debug info");
-    digitalWrite(LED_BUILTIN, HIGH);
     while (1);
   }
   Sprintln("LoRa radio init OK!");
@@ -297,7 +288,6 @@ void setupLoRa()
   // Defaults after init are 434.0MHz, modulation GFSK_Rb250Fd250, +13dbM
   if (!rf95.setFrequency(RF95_FREQ)) {
     Sprintln("setFrequency failed");
-    digitalWrite(LED_BUILTIN, HIGH);
     while (1);
   }
 

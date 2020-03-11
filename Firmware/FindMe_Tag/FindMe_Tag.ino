@@ -8,6 +8,7 @@
 #include "Timer.h"
 #include <Adafruit_Sensor.h>
 #include <Adafruit_ADXL343.h>
+#include <Battery.h>
 
 // Pin definitions
 #define RFM95_RST 30
@@ -15,11 +16,21 @@
 #define RFM95_INT 31
 #define ACCEL_INT1 16 // accelerometer interrupt pin 1
 #define ACCEL_INT2 15 // accelerometer interrupt pin 2
-#define BATTERY_VOLTAGE (A0) // change dependent on PCB
+#define BATTERY_VOLTAGE (A0) // senses battery voltage/USB rail
 
 // LoRa definitions
-#define RF95_FREQ 915.0            // Can also be 434.0 - must match freq of chipset
-RH_RF95 rf95(RFM95_CS, RFM95_INT); // Singleton instance of the radio driver
+#define RF95_FREQ 915.0 // frequency of LoRa
+RH_RF95 rf95(RFM95_CS, RFM95_INT); // singleton instance of the LoRa driver
+
+// Battery monitoring definitions
+#define BATT_MIN (3000) // minimum battery voltage (mV)
+#define BATT_MAX (4200) // maximum battery voltage (mV)
+#define REF_VOLTAGE (3600) // internal ADC reference voltage (mV)
+#define ADC_RES (1024) // default 10bit resolution - can be 8,10,12,14
+#define RES_RATIO (2) // resistor ratio on analog rail
+#define MAX_BATT_PERCENT (100) // maximum battery percent (used in clipping)
+#define MIN_BATT_PERCENT (5) // minimum battery percent (used in clipping)
+Battery battery(BATT_MIN, BATT_MAX, BATTERY_VOLTAGE);
 
 // GPS definitions/declerations
 SFE_UBLOX_GPS myGPS;
@@ -37,9 +48,9 @@ TimerClass timer(nrf_timer_num, cc_channel_num);
 // Application variables
 #define LORA_RX_DELAY 1 // how often data is sent over LoRa
 #define LORA_TX_COUNT 5 // how many LORA_RX_DELAY intervals to wait before sending LoRa data
-#define ACTIVITY_THRESH 100 // Set activity threshold: 62.5mg per increment
-#define INACTIVITY_THRESH 50 // Set inactivity threshold: 62.5mg per increment
-#define INACTIVE_TIME 10 // Amount of time (seconds), after inactivity is detected
+#define ACTIVITY_THRESH 100 // set activity threshold: 62.5mg per increment
+#define INACTIVITY_THRESH 50 // set inactivity threshold: 62.5mg per increment
+#define INACTIVE_TIME 10 // amount of time (seconds), after inactivity is detected
 #define GEOFENCE_LAT (434788942) // demo geofence lattitude
 #define GEOFENCE_LONG (-805236027) // demo geofence longitude
 #define GEOGENCE_RAD_CM 4000 // in CM
@@ -52,7 +63,7 @@ bool inactFlag = 0; // determines whether inactive or not (may not be needed)
 volatile bool timerFlag = 0; // determines whether timer has expired
 
 // DEMO
-#define BLUE_LED 19
+#define BLUE_LED 28
 
 // Timer ISR
 void timer_isr() {
@@ -72,19 +83,23 @@ void accel_int2_isr(void)
     // clear interrupts?
 }
 
-void setup() 
+void setup()
 {
   Serial.begin(9600);
   Serial.println("FindMe - Tag booted");
 
   // Demo: LEDs
-  pinMode(LED_BUILTIN, OUTPUT);
   pinMode(BLUE_LED, OUTPUT);
 
+  // Setup devices
   setupGPS();
   setupLoRa();
   setupAccel();
 
+  // Start battery algorithm
+  battery.begin(REF_VOLTAGE, RES_RATIO, &sigmoidal);
+
+  // Reset timer
   timer.attachInterrupt(&timer_isr, LORA_RX_DELAY*1000000); // microseconds
 }
 
@@ -116,12 +131,9 @@ void loop()
 
 void recieveLoRaPacket()
 {
-  digitalWrite(LED_BUILTIN, HIGH);
-
   // Check for LoRa message
   if (rf95.available())
   {
-    // Should be a message for us now
     uint8_t buf[RH_RF95_MAX_MESSAGE_LEN];
     uint8_t len = sizeof(buf); // potentially useless line
     if (rf95.recv(buf, &len))
@@ -141,8 +153,6 @@ void recieveLoRaPacket()
       }
     }
   }     
-
-  digitalWrite(LED_BUILTIN, LOW);
 }
 
 void sendLoRaPacket()
@@ -164,7 +174,6 @@ void sendLoRaPacket()
     latitude_mdeg = myGPS.getLatitude()/100;
     longitude_mdeg = myGPS.getLongitude()/100;
   }
-
   Serial.print(" Lat: "); Serial.print(latitude_mdeg); Serial.print(" Long: "); Serial.print(longitude_mdeg);
 
   // Add +/- signs to coords
@@ -183,15 +192,20 @@ void sendLoRaPacket()
   }
 
   // Calculate battery percentage
-  float ADC_RES = 1024.0; // default 10bit resolution - can be 8,10,12,14
-  float REF_VOLTAGE = 3.6;
-  float battVoltage; // battery + USB voltage
-  int inputVoltageRaw = analogRead(BATTERY_VOLTAGE);
-  battVoltage = (inputVoltageRaw / ADC_RES) * REF_VOLTAGE;
+  // Read battery voltage, apply sigmoidal model, apply custom model to linearize the model further
+  uint16_t battVoltage = analogRead(BATTERY_VOLTAGE) * RES_RATIO * REF_VOLTAGE / ADC_RES;
+  uint8_t sigBatteryPercent = battery.level(battVoltage);
+  int8_t danBatteryPercent = (sigBatteryPercent-40)*1.7; // see Excel sheet for how bias values were determined
 
-  // TODO: convert voltage to percentage   // Either use EXCEL or library
-  uint8_t batteryPercentage = 99;
-  // ESPERTO: battVoltage = 2*(inputVoltageRaw / ADC_RESOLUTION) * REFERENCE_VOLTAGE; // 2* because of voltage divider config
+  // Clip battery percent (ensure it is not above 100 or negative)
+  if(danBatteryPercent > MAX_BATT_PERCENT)
+  {
+    danBatteryPercent = MAX_BATT_PERCENT;
+  }
+  else if(danBatteryPercent < MIN_BATT_PERCENT)
+  {
+    danBatteryPercent = MIN_BATT_PERCENT;
+  }
 
   // Append battery percentage and alert dignifier
   // Y = alert risen, N = no alert
@@ -203,11 +217,11 @@ void sendLoRaPacket()
   Serial.print(" GEO: "); Serial.println(currentGeofenceState.states[0]);
   if(currentGeofenceState.states[0] == 2)
   {
-     sprintf ((char*)buf, "%s %d Y\0", (char*)buf, batteryPercentage);
+     sprintf ((char*)buf, "%s %d Y\0", (char*)buf, danBatteryPercent);
   }
   else
   {
-    sprintf ((char*)buf, "%s %d N\0", (char*)buf, batteryPercentage);
+    sprintf ((char*)buf, "%s %d N\0", (char*)buf, danBatteryPercent);
   }
 
   // Send LoRa message with GPS coordinates, battery info, 
@@ -226,12 +240,6 @@ void sendLoRaPacket()
   
   digitalWrite(BLUE_LED, LOW);
 }
-
-
-
-
-
-
 
 /////////////////////////////////////////////////////////////
 //////////// HELPER FUNCTIONS ///////////////////////////////

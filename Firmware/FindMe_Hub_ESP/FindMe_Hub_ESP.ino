@@ -302,6 +302,7 @@ void loop()
         String battery = data.substring(17,dataSize-2); // 17->18,19,20
         bool alert = ((data.substring(dataSize-1, dataSize)) == "Y");
         ServerRequestService::updateData(location, battery, alert);
+        testPulse();
         
         if(forcedRequestFlag)
         {
@@ -309,7 +310,6 @@ void loop()
            forcedRequestFlag = 0;
            forcedRequestReject = 1;
            ServerRequestService::endForceRequest();
-           testPulse();
         }
       }
 
