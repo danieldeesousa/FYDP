@@ -239,9 +239,7 @@ void setup()
   Serial.write("\n");
 
   // Setup Firebase connection
-  StatusResponse uid_response = ServerRequestService::getUID();
-  if (uid_response.status_code == ERROR_CODE) return;
-  const String& uid = uid_response.response;
+  const String& uid = "WT6piAaCIiN7UCNuDuuBgiKMiTs1";
   Sprintf("uid: %s\n", uid.c_str());
 
   Firebase.begin(kFirebaseHost, kFirebaseAuth);
@@ -265,18 +263,16 @@ void loop()
   // Check if Wi-Fi is connected
   if(WiFi.status() != WL_CONNECTED)
   {
-      bool ledState2 = true;
-      // while (WiFi.status() != WL_CONNECTED) 
-      // infinite loop until reset
-      while (1) 
+      bool ledState2 = false;
+      // starting low -> off/on -> off/on -> off
+      for (int i = 0; i < 5; i++) 
       {
         delay(200);
         digitalWrite(LED_PIN, ledState2);
         ledState2 = !ledState2;
       }
-      // digitalWrite(LED_PIN, LOW); // Note: LED is active LOW
-      // ESP.restart(); // put the processor in a weird state
-      // https://arduino-esp8266.readthedocs.io/en/latest/esp8266wifi/generic-examples.html
+  } else {
+    digitalWrite(LED_PIN, LOW);
   }
   
   // Wait on Serial message
